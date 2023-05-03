@@ -1,0 +1,361 @@
+---
+title: "Electricity Consumption and Renewable Energy Generation in Colorado"
+author: "Yaquan Yang, Weixiao Li, Haocheng Zhu"
+date: "2023-04-17"
+output:
+  html_document:
+    df_print: paged
+  pdf_document:
+    latex_engine: xelatex
+  word_document: default
+---
+
+```{r setup, include=FALSE,echo=FALSE,warning=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+# Abstract:
+To analyze the role of consumer behavior in driving the use of renewable energy and the need for energy efficiency practices in Colorado. This peoject uses a variety of machine learning models, such as multiple linear regression, decision trees, random forests, and support vector machines to analyze patterns and trends in electricity consumption as a consumer behavior. In addition, time series models are used to analyze the use of renewable energy in Colorado in recent years, and ARIMA and Holt-Winters models are used to forecast the total renewable energy production, wind power consumption, and coal power consumption in Colorado for the next seven years.
+
+# Introduction:
+Increasing energy demand has led to a greater emphasis on renewable energy. This project attempts to examine the impact of consumer behavior on energy consumption and renewable energy conservation. It has been observed that electricity consumption in Colorado has been increasing in recent years. To address this consumption phenomenon, we apply various models to analyze the impact of consumer behavior on renewable energy conservation and energy consumption. A time series model is also used to predict the future use of renewable energy. The results show that renewable energy production and consumption show an upward trend, while non-renewable energy consumption shows a downward trend. The results of this analysis will provide insight into the potential impact of consumer behavior on energy consumption and renewable energy conservation.
+
+# Data source:
+Electricity_Revenue_by_Utility_in_Colorado.csv:https://data.colorado.gov/Business/Electricity-Revenue-by-Utility-in-Colorado/gdh8-8pg4
+Electricity_Revenue_in_Colorado.csv:https://data.colorado.gov/Business/Electricity-Revenue-in-Colorado/q6sk-tjm9
+prod_btu_re_te:https://www.eia.gov/state/seds/seds-data-complete.php?sid=US#StatisticsIndicators
+Prod_dataset:https://www.eia.gov/state/seds/seds-data-complete.php?sid=AL#CompleteDataFile
+use_all_btu:https://www.eia.gov/state/seds/seds-data-complete.php?sid=AL#Consumption
+```{r,echo=FALSE,warning=FALSE}
+library(ggplot2)
+library(readxl)
+library(dplyr)
+library(gridExtra)
+library(tseries)
+library(lubridate)
+library(forecast)
+library(tidyverse)
+library(caret)
+library(gridExtra)
+library(forecast)
+library(caTools)
+library(mlbench)
+library(caretEnsemble)
+library(naniar)
+
+```
+
+```{r,echo=FALSE,warning=FALSE}
+Prod <- read_excel("Prod_dataset.xlsx")
+prod_btu_re_te <- read_excel("prod_btu_re_te.xlsx", sheet = "Total Renewables")
+head(Prod)
+```
+
+
+# Electricity consumption
+First, we will analyze the revenue and pricing of monthly electricity consumption in Colorado since 1990. The analysis of these data will allow us to understand the size and trends of the electricity market and explore the impact of pricing strategies on revenues.
+
+## Electricity_Revenue_Utility
+```{r,echo=FALSE,warning=FALSE}
+Electricity_Revenue_Utility<- read.csv("Electricity_Revenue_by_Utility_in_Colorado.csv")
+```
+
+```{r,echo=FALSE,warning=FALSE}
+Electricity_Revenue<- read.csv("Electricity_Revenue_in_Colorado.csv")
+year_month <- paste(Electricity_Revenue$year, Electricity_Revenue$month, sep = "-")
+Electricity_Revenue <- cbind(Electricity_Revenue,year_month)
+```
+
+According to the data, the electricity market in Colorado has grown year by year since 1990, and the monthly electricity consumption has gradually increased. Especially in recent years, with the increase in population and economic development, the size of the electricity market has shown a rapid growth trend. At the same time, the level of electricity prices has also changed with the size of the market, with prices fluctuating, but generally showing an upward trend.
+
+Rising demand may be driving renewable energy generation.
+```{r,warning=FALSE,echo=FALSE,warning=FALSE}
+used_col<- c(colnames(Electricity_Revenue_Utility[,10:29]))
+groupby_year <- Electricity_Revenue_Utility %>%
+    group_by(year) %>%
+    summarise(across(all_of(used_col), sum))
+x_var <-groupby_year$year 
+y_var1 <- groupby_year$totalRev
+y_var2 <- groupby_year$totalSales
+y_var3 <- groupby_year$totalCust
+y_var4 <- Electricity_Revenue$totalPrice
+p1 <- ggplot(groupby_year, aes(x=x_var)) +
+  geom_line(aes(y=y_var1, color="Revenue")) +
+  
+  scale_color_manual(values=c("blue")) +
+  xlab("Year") +
+  ylab("Total Revenue") +
+  ggtitle("Revenue for electricity consumption in Colorado")+
+      theme(plot.title = element_text(size = 10)) 
+p2 <- ggplot(groupby_year, aes(x=x_var)) +
+  geom_line(aes(y=y_var2, color="Sales")) +
+  scale_color_manual(values=c("red")) +
+  xlab("Year") +
+  ylab("Total Sales") +
+  ggtitle("Sales for electricity consumption in Colorado")+
+      theme(plot.title = element_text(size = 10)) 
+p3 <- ggplot(groupby_year, aes(x=x_var)) +
+    geom_line(aes(y=y_var3, color="Customers")) +
+  scale_color_manual(values=c("orange")) +
+  xlab("Year") +
+  ylab("Total Customers") +
+  ggtitle("Number of customers consuming electricity") +
+      theme(plot.title = element_text(size = 10)) 
+  
+ p4 <-  ggplot(Electricity_Revenue, aes(x=Electricity_Revenue$year, Electricity_Revenue$totalPrice)) +
+    geom_point()+
+  xlab("Year") +
+  ylab("Total Price") +
+  ggtitle("Price of electricity in Colorado")+
+  theme(plot.title = element_text(size = 10)) 
+  grid.arrange(p1,p2,p3,p4, ncol = 2)
+```
+
+Now we build models with different machine learning algorithms to regress and predict the total electricity sales in Colorado to determine how electricity demand has changed over the last three decades.
+
+
+
+### Cheching missing value
+```{r warning=FALSE,echo=FALSE}
+set.seed(123)
+used_col<- data.frame(Electricity_Revenue[,5:28])
+vis_miss(used_col) ##missing
+
+na.pro=lapply(used_col,function(x) sum(is.na(x)/length(x)))
+na.pro=unlist(na.pro)
+na.pro=as.numeric(na.pro)
+table(na.pro<0.2)
+used_col=used_col[,na.pro<0.9]
+used_col[is.na(used_col)] <- 0
+```
+### Split train-test dataset
+```{r,echo=FALSE,warning=FALSE}
+str(used_col)
+split <- sample.split(used_col$totalSales, SplitRatio = 0.8)
+train <- subset(used_col, split == TRUE)
+test <- subset(used_col, split == FALSE)
+```
+
+
+## Model fitting
+
+We fitted different machine learning models with total electricity sales as a response variable and made predictions.
+
+### Multiple linear regression
+```{r,echo=FALSE,warning=FALSE}
+lm.fit <- train(totalSales ~ ., data = train, method = "lm", trControl = trainControl(method = "cv", number = 5))
+summary(lm.fit)
+```
+
+```{r,echo=FALSE,warning=FALSE}
+lm.pred <- predict(lm.fit, newdata = test)
+lm.rmse <- RMSE(lm.pred, test$totalSales)
+```
+
+### Decision Tree
+```{r,echo=FALSE,warning=FALSE}
+dt.fit <- train(totalSales ~ ., data = train, method = "rpart", trControl = trainControl(method = "cv", number = 5))
+print(dt.fit)
+```
+```{r,echo=FALSE,warning=FALSE}
+dt.pred <- predict(dt.fit, newdata = test)
+dt.rmse <- RMSE(dt.pred, test$totalSales)
+```
+
+
+### Random Forest
+```{r,echo=FALSE,warning=FALSE}
+rf.fit <- train(totalSales ~ ., data = train, method = "rf", trControl = trainControl(method = "cv", number = 5))
+print(rf.fit)
+```
+
+
+```{r,echo=FALSE,warning=FALSE}
+rf.pred <- predict(rf.fit, newdata = test)
+rf.rmse <- RMSE(rf.pred, test$totalSales)
+```
+
+### Support vector machine
+```{r,echo=FALSE,warning=FALSE}
+svm.fit <- train(totalSales ~ ., data = train, method = "svmRadial", trControl = trainControl(method = "cv", number = 5))
+print(svm.fit)
+```
+
+```{r,echo=FALSE,warning=FALSE}
+svm.pred <- predict(svm.fit, newdata = test)
+svm.rmse <- RMSE(svm.pred, test$totalSales)
+```
+
+### Model check
+From the root mean square error (RMSE) of these four models, we can see that the multiple linear regression model performs best in predicting electricity sales, which may be related to the linear relationship between the response variable and the predictor variable.
+```{r,echo=FALSE,warning=FALSE}
+print(paste("RMSE of Multiple linear regression：", lm.rmse))
+print(paste("RMSE of Decision Trees：", dt.rmse))
+print(paste("RMSE of Random Forest：", rf.rmse))
+print(paste("RMSE of Support vector machine：", svm.rmse))
+```
+
+
+### Ensemble
+Now we train multiple models simultaneously, cross-validate them and calculate evaluation metrics that help us choose the best model.
+```{r,echo=FALSE,warning=FALSE}
+control <- trainControl(method="cv", number=10, repeats=3, savePredictions=TRUE)
+
+algorithmList<-c('glm',"rf",'rpart','svmRadial')
+
+set.seed(123)
+models <- caretList(totalSales~., data=train, trControl=control, methodList=algorithmList)
+results <- resamples(models)
+summary(results)
+pdf("multimodel.pdf")
+dotplot(results)
+dev.off()
+```
+From the Mean Absolute Error(MAE) and root mean square error (RMSE) in the model evaluation above we can conclude that the best performing model is multiple linear regression, followed by random forest and support vector machine, and the decision tree algorithm does not perform as well as it should in this problem.
+
+
+
+
+
+
+# Renewable Energy Analysis
+Next we need to analyze the annual renewable energy generation in Colorado since 1960. By analyzing this data, we can understand the use and trends of renewable energy in Colorado.
+
+U.S. Energy Information Administration collects yearly Total Renewable Energy Production data of Colorada, and units are billion Bu. 
+
+```{r,echo=FALSE,warning=FALSE}
+prod_btu_re_te_new <- read_excel("prod_btu_re_te.xlsx", sheet = "Sheet1")
+prod_btu_re_te_new$Year <- prod_btu_re_te_new$State
+prod_btu_re_te_new$Production <- prod_btu_re_te_new$CO
+prod_btu_re_te_new <- prod_btu_re_te_new[, -(1:2)]
+```
+
+
+From the time series plot, there is an obvious upward trend generally, so it seems not to be stationary. In order to do the following analysis and forcasts works. we need to do transformations.
+```{r,warning=FALSE,echo=FALSE}
+myts <- ts(prod_btu_re_te_new[, 2], start =prod_btu_re_te_new[1, 1], frequency = 1)
+plot.ts(myts,main="Renewable energy production of Colorada", xlab="Year",ylab="Production")
+```
+
+To eliminate the trend, we performed two differentials on the data.
+We take Dicky-Fuller (DF) Test, which is a type of unit root test that tests the null hypothesis that a time series has a unit root against the alternative hypothesis that it does not have a unit root. The results show that the p- value < 0.05, rejecting the original hypothesis and the data is stationary.
+```{r,echo=FALSE,warning=FALSE}
+diff_ts <- diff(diff(myts))
+plot(diff_ts,main="Differenced Data Order 2")
+adf.test(diff_ts)
+```
+
+In order to forecast the future renewable energy production of Colorado. We apply the ARIMA model. From the ACF and PACF plots, we can see that PACF cuts off after lag 2 and then decayed to zero, while ACF exponential decaying to zero. So for the initial model, I choose ARIMA(2,2,0). (see Fig.7)
+```{r,echo=FALSE,warning=FALSE}
+par(mfrow=c(1,2))
+acf(diff_ts, main="Autocorrelation Function")
+pacf(diff_ts, main="Partial Autocorrelation Function")
+```
+We apply auto.arima() function as a reference
+Since there are many fitting models, I chose the three most likely models based on the ACF and PACF plots. Through the results, we can see that the second model has the smallest AIC and BIC values, so I choose ARIMA(2,2,2) as my final model to do the following forecasts
+
+```{r,warning=FALSE,echo=FALSE}
+fit1 <- auto.arima(diff_ts, d=2, max.p=5, max.q=5)
+summary(fit1)
+fit2 <- arima(diff_ts,order=c(2,2,2))
+fit3 <- arima(diff_ts,order=c(2,2,0))
+models <- c("fit1", "fit2", "fit3")
+aic_values <- sapply(models, function(model) AIC(get(model)))
+bic_values <- sapply(models, function(model) BIC(get(model)))
+data.frame(Model = models, AIC = aic_values, BIC = bic_values)
+best_model <- get(models[which.min(aic_values)])
+```
+According to the result, Colorado's renewable energy generation has been increasing year by year since 1960. Especially after 2005, with the encouragement and support of the government, the development of renewable energy has shown a rapid growth trend.
+
+
+### ARIMA Forecast
+Through the picture we can see that the future energy production are in a clear upward trend in the following seven years.
+
+```{r,echo=FALSE,warning=FALSE}
+fit2_orig <- arima(myts,order=c(2,2,2))
+forecast1=forecast(fit2_orig,h=7)
+forecast1
+plot(forecast1,main="Renewable Energy Forecast",xlab="Year",ylab="Production")
+```
+### QQ-plot
+The evaluation of the model is crucial in the forecasting process, thus I take normal QQ plot and diagnostic plots to do the work. The QQ residual plot shows that the residuals are almost normally distributed. And the Standardized Residuals plot shows there is no clear trend or seasonality, which indicates the model has captured these patterns in the data. In addition, the ACF plot is used to check the residuals for autocorrelation. While the ACF plot shows a  significant spikes at lag 1 and this may indicate that there is still some correlation between the residuals and the lagged values of the time series. But the p-values for the Ljung-Box statistic are all greater than the significance level(0.05), so the residuals are likely uncorrelated. In general, the ARIMA model is a good fit for the data
+```{r,echo=FALSE,warning=FALSE}
+myresiduals <- residuals(fit2)
+qqnorm(myresiduals)
+qqline(myresiduals)
+#diagnostic plots
+tsdiag(fit2)
+```
+
+
+
+We found that one of the ten largest plants in Colorado by electricity generation is wind power and is ranked 7th, indicating that wind power is starting to become important in Colorado.
+Nevertheless, coal is still the main source of energy for power generation, so we focus our analysis below on wind and coal consumption.
+
+
+```{r}
+Electric_generation <- read_excel("co.xlsx", sheet = 6, skip = 3)
+Plants_Generation <- read_excel("co.xlsx", sheet = 3, skip = 2)
+renewable_generation <- Electric_generation[c(24,17,19,20), ]
+```
+
+```{r warning=FALSE,echo=FALSE}
+ggplot(Plants_Generation, aes(x = reorder(Plants_Generation$Plant, -Plants_Generation$`Generation (MWh)`), y=Plants_Generation$`Generation (MWh)`,fill = Plants_Generation$`Primary energy source`)) +
+  geom_bar(stat = "identity")+
+  labs(title = "Ten largest plants by generation in Colorado(2021)", x = "Plant", y = "Generation (MWh)", fill = "Energy Source") +
+  theme_classic()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+## Wind consumption
+We also make forecasts of wind energy total consumption. The units are billion Bu.
+```{r,echo=FALSE,warning=FALSE}
+prod_new <- read_excel("Prod_dataset.xlsx", sheet = "Sheet1")
+prod_new <- prod_new[-c(1, 2), ]
+prod_new <- dplyr::filter(prod_new,prod_new$`2020F`!="0")
+```
+
+This is the time series model of wind energy total consumption for the available years.
+```{r,echo=FALSE,warning=FALSE}
+myts_windcop <- ts(prod_new[, 2], start =prod_new[1, 1], frequency = 1)
+plot.ts(myts_windcop,main="Wind energy total consumption of Colorada", xlab="Year",ylab="consumption")
+```
+
+### Holt-Winters Forecast
+Another widely used forecast method is Holt-Winters Seasonal Forecast. It utilizes a form of double exponential smoother to compute the forecast. The table of predicted results is as follow.
+we can see that the future consumption of wind energy is almost flat with a slight downward trend.
+```{r,echo=FALSE,warning=FALSE}
+fit_windc=HoltWinters(myts_windcop,gamma=F)
+f <- forecast(fit_windc)
+f
+plot(f)
+```
+
+## coal(Non-renewable energy) consumption
+We have also forecast future non-renewable energy consumption for comparison, using coal as an example.
+After a significant increase in coal consumption from 1980 to 2020, coal consumption starts to decline from 2020.
+```{r,echo=FALSE,warning=FALSE}
+use_all_btu <- read_excel("use_all_btu.xls",sheet = "Sheet1")
+coaltcb<- use_all_btu[-c(1, 2), ]
+myts_coaltcb <- ts(coaltcb[, 2], start =coaltcb[1, 1], frequency = 1)
+plot.ts(myts_coaltcb,main="Coal total consumption of Colorada", xlab="Year",ylab="consumption")
+```
+
+### Holt-Winters Forecast
+Coal consumption is basically flat, with no upward trend in the future
+```{r,echo=FALSE,warning=FALSE}
+fit_coaltcb=HoltWinters(myts_coaltcb,gamma=F)
+f_coaltcb <- forecast(myts_coaltcb)
+f_coaltcb
+plot(f_coaltcb)
+```
+
+
+# Conclusion
+By analyzing the data, we can find that Colorado's electricity market shows a trend of transitioning from traditional to renewable energy sources as the use of renewable energy increases. The development of renewable energy sources not only has a positive impact on the environment and climate change, but also brings good opportunities for economic and employment development in the state.
+
+In summary, by analyzing the revenue and pricing of monthly electricity consumption in Colorado since 1990 versus annual renewable energy consumption since 1960, we can better understand the development and future trends of the electricity market and provide data to support better electricity planning and decision making by government and energy companies.
+
+
+
